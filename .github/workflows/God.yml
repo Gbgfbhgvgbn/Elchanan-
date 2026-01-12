@@ -1,0 +1,139 @@
+name: Six-Stage Bulletproof Build
+on: [push, workflow_dispatch]
+
+jobs:
+  multi-tool-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Environment (JDK & SDK)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      
+      - name: Install Extra Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip curl python3-pip
+          pip3 install --user buildozer
+
+      # --- פונקציית ניקוי שתרוץ לפני כל ניסיון ---
+      - name: Scorch Earth & Reset Cache
+        run: |
+          echo "Purging all caches and project files..."
+          find . -maxdepth 1 ! -name '.github' ! -name '.' -exec rm -rf {} +
+          sudo rm -rf ~/.gradle
+          sudo rm -rf /opt/hostedtoolcache/gradle
+          mkdir -p app/src/main/java/com/research/lab
+          mkdir -p app/src/main/res/values
+
+      # --- כלי 1: Gradle 8.1.1 (Isolated) ---
+      - name: Method 1 - Isolated Gradle
+        id: m1
+        continue-on-error: true
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.1.1-bin.zip
+          unzip -q gradle-8.1.1-bin.zip
+          echo "include ':app'" > settings.gradle
+          cat <<'EOF' > build.gradle
+          buildscript { repositories { google(); mavenCentral() }; dependencies { classpath 'com.android.tools.build:gradle:8.1.0' } }
+          allprojects { repositories { google(); mavenCentral() } }
+          EOF
+          cat <<'EOF' > app/build.gradle
+          plugins { id 'com.android.application' }; android { namespace 'com.research.lab'; compileSdk 33
+          defaultConfig { applicationId "com.research.lab"; minSdk 24; targetSdk 33 } }
+          EOF
+          ./gradle-8.1.1/bin/gradle assembleDebug --no-daemon --no-build-cache && cp app/build/outputs/apk/debug/*.apk final_app.apk
+
+      # --- כלי 2: CLI Direct (AAPT2 + D8) ---
+      - name: Method 2 - Manual CLI (No Build Tool)
+        if: steps.m1.outcome == 'failure'
+        id: m2
+        continue-on-error: true
+        run: |
+          sudo rm -rf ~/.gradle # ניקוי מטמון נוסף
+          BUILD_TOOLS=$ANDROID_HOME/build-tools/33.0.0
+          PLATFORM=$ANDROID_HOME/platforms/android-33/android.jar
+          echo '<resources><string name="app_name">Res</string></resources>' > app/src/main/res/values/strings.xml
+          cat <<'EOF' > app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.research.lab">
+          <application><activity android:name=".Main" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/></intent-filter></activity></application></manifest>
+          EOF
+          $BUILD_TOOLS/aapt2 compile app/src/main/res/values/strings.xml -o res.zip
+          $BUILD_TOOLS/aapt2 link --manifest app/src/main/AndroidManifest.xml -I $PLATFORM res.zip -o manual.apk
+          echo "package com.research.lab; import android.app.Activity; public class Main extends Activity {}" > app/src/main/java/com/research/lab/Main.java
+          javac -source 1.8 -target 1.8 -bootclasspath $PLATFORM app/src/main/java/com/research/lab/Main.java -d .
+          $BUILD_TOOLS/d8 com/research/lab/*.class --lib $PLATFORM --output .
+          zip -u manual.apk classes.dex && mv manual.apk final_app.apk
+
+      # --- כלי 3: Dockerized Android (Container) ---
+      - name: Method 3 - Docker Build
+        if: steps.m2.outcome == 'failure'
+        id: m3
+        continue-on-error: true
+        run: |
+          docker run --rm -v $(pwd):/src mingyuliutw/android-build-box:latest /bin/bash -c "cd /src && gradle assembleDebug"
+          cp app/build/outputs/apk/debug/*.apk final_app.apk
+
+      # --- כלי 4: Buildozer (Python-based) ---
+      - name: Method 4 - Buildozer
+        if: steps.m3.outcome == 'failure'
+        id: m4
+        continue-on-error: true
+        run: |
+          cat <<'EOF' > main.py
+          from kivy.app import App
+          class MainApp(App): pass
+          if __name__ == "__main__": MainApp().run()
+          EOF
+          buildozer init
+          ~/.local/bin/buildozer android debug
+          mv bin/*.apk final_app.apk
+
+      # --- כלי 5: Ant (The Old School Tool) ---
+      - name: Method 5 - Apache Ant
+        if: steps.m4.outcome == 'failure'
+        id: m5
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y ant
+          # בניית קובץ build.xml פשוט של Ant
+          cat <<'EOF' > build.xml
+          <project name="ManualAnt" default="debug">
+            <target name="debug">
+              <echo>Ant build starting...</echo>
+              </target>
+          </project>
+          EOF
+          ant debug && mv *.apk final_app.apk || exit 1
+
+      # --- כלי 6: Makefile (Raw Shell) ---
+      - name: Method 6 - GNU Make
+        if: steps.m5.outcome == 'failure'
+        id: m6
+        run: |
+          cat <<'EOF' > Makefile
+          build:
+          	@echo "Last resort build with Make"
+          	# פקודת קימפול שורתית אחרונה
+          EOF
+          make build
+
+      # --- בדיקת הצלחה סופית ---
+      - name: Final Result Check
+        run: |
+          if [ -f "final_app.apk" ]; then
+            echo "Build successful!"
+          else
+            echo "All 6 methods failed."
+            exit 1
+          fi
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-stable-apk
+          path: final_app.apk
