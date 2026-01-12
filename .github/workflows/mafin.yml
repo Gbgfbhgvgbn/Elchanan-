@@ -1,4 +1,4 @@
-name: Absolute Path Fix
+name: Locked Build
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,19 +14,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install Locked Gradle 8.0
+      - name: Manual Gradle Download
+        # אנחנו מורידים גרסה 8.0 ידנית לתוך תיקייה בשם "mygradle"
         run: |
-          # הורדה והתקנה לתיקייה ספציפית בתוך מרחב העבודה
           wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip
           unzip -q gradle-8.0-bin.zip
-          # אנחנו לא מוסיפים ל-PATH כדי שגרסה 9 לא "תדחף", אנחנו פשוט נשתמש בנתיב המלא
+          mv gradle-8.0 mygradle
 
       - name: Create Structure
         run: |
           mkdir -p victim/src/main/java/com/research/lab/victim
           mkdir -p victim/src/main/res/xml
           mkdir -p controller/src/main/java/com/research/lab/controller
-
           echo "include ':victim', ':controller'" > settings.gradle
           
           cat <<'EOF' > build.gradle
@@ -57,7 +56,7 @@ jobs:
           }
           EOF
 
-      - name: Inject Java & Manifests
+      - name: Inject Code
         run: |
           cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
           package com.research.lab.victim;
@@ -71,13 +70,11 @@ jobs:
               }
           }
           EOF
-
           cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
           package com.research.lab.controller;
           import android.app.Activity;
           public class ControllerApp extends Activity {}
           EOF
-
           cat <<'EOF' > victim/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application>
@@ -92,7 +89,6 @@ jobs:
           </manifest>
           EOF
           echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityFlags="flagDefault" />' > victim/src/main/res/xml/acc_config.xml
-
           cat <<'EOF' > controller/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application><activity android:name=".ControllerApp" android:exported="true">
@@ -101,21 +97,14 @@ jobs:
           </manifest>
           EOF
 
-      - name: Final Build with Absolute Path
+      - name: Forced Build
         run: |
-          # כאן הקסם: שימוש בנתיב המלא לגרסה 8.0 שהורדנו. שום דבר לא יכול לשבור את זה.
-          ./gradle-8.0/bin/gradle assembleDebug --no-daemon
+          # כאן אנחנו משתמשים בנתיב המפורש ל-Binary שהורדנו. 
+          # אין סיכוי שגרסה 9 תתערב כי אנחנו לא קוראים ל-"gradle" אלא ל-"./mygradle/bin/gradle"
+          ./mygradle/bin/gradle assembleDebug --no-daemon
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: research-apks
           path: "**/build/outputs/apk/debug/*.apk"
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: research-apks
-          path: "**/build/outputs/apk/debug/*.apk"
-          
