@@ -1,79 +1,48 @@
-name: Manual Manual Build
+name: Build with Buildozer
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Install Android SDK Tools
+      - name: Install Dependencies
         run: |
-          # התקנת הכלים הבסיסיים ביותר של אנדרואיד בלי Gradle
-          sudo apt-get update
-          sudo apt-get install -y android-sdk
-          export ANDROID_HOME=/usr/lib/android-sdk
-          export PATH=$PATH:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools
+          sudo apt update
+          sudo apt install -y python3-pip build-essential git python3 python3-dev ffmpeg libsdl2-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev
+          sudo apt install -y libsqlite3-dev sqlite3 bzip2 libbz2-dev libssl-dev openssl libgdbm-dev libgdbm-compat-dev liblzma-dev libreadline-dev libncursesw5-dev libffi-dev uuid-dev
+          pip3 install --user --upgrade buildozer
 
-      - name: Create Minimal App Structure
+      - name: Create Buildozer Specs
         run: |
-          mkdir -p src/com/research/lab
-          mkdir -p res/values
-          mkdir -p obj
-          mkdir -p bin
-
-          # יצירת קוד פשוט ביותר
-          cat <<'EOF' > src/com/research/lab/MainActivity.java
-          package com.research.lab;
-          import android.app.Activity;
-          import android.os.Bundle;
-          public class MainActivity extends Activity {
-              @Override protected void onCreate(Bundle s) { super.onCreate(s); }
-          }
+          # יצירת קובץ הגדרות שלא תלוי ב-Gradle של המערכת
+          cat <<'EOF' > main.py
+          from kivy.app import App
+          from kivy.uix.label import Label
+          class ResearchApp(App):
+              def build(self):
+                  return Label(text='Security Lab Test')
+          if __name__ == '__main__':
+              ResearchApp().run()
           EOF
 
-          # מניפסט בסיסי
-          cat <<'EOF' > AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.research.lab">
-              <application android:label="ManualApp">
-                  <activity android:name=".MainActivity" android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
+          # יצירת קובץ הקונפיגורציה של Buildozer
+          buildozer init
+          sed -i 's/package.name = myapp/package.name = researchapp/' buildozer.spec
+          sed -i 's/package.domain = org.test/package.domain = com.research.lab/' buildozer.spec
+          # כאן אנחנו נועלים גרסאות בתוך Buildozer
+          sed -i 's/#android.api = 31/android.api = 33/' buildozer.spec
 
-          # קובץ משאבים מינימלי
-          echo '<resources><string name="app_name">ManualApp</string></resources>' > res/values/strings.xml
-
-      - name: Direct Compilation (No Build Tool)
+      - name: Build APK
         run: |
-          # 1. יצירת משאבים (AAPT2)
-          /usr/lib/android-sdk/build-tools/30.0.3/aapt2 compile res/values/strings.xml -o res.zip
-          /usr/lib/android-sdk/build-tools/30.0.3/aapt2 link --manifest AndroidManifest.xml -I /usr/lib/android-sdk/platforms/android-30/android.jar res.zip -o manual_app.apk
+          # הרצה של buildozer. זה יוריד SDK ו-NDK משלו בגרסאות מבודדות
+          ~/.local/bin/buildozer android debug
 
-          # 2. קימפול קוד Java ל-Bytecode
-          javac -source 1.8 -target 1.8 -bootclasspath /usr/lib/android-sdk/platforms/android-30/android.jar src/com/research/lab/MainActivity.java -d obj/
-
-          # 3. המרה ל-Dex (הפורמט של אנדרואיד) באמצעות D8
-          /usr/lib/android-sdk/build-tools/30.0.3/d8 obj/com/research/lab/*.class --lib /usr/lib/android-sdk/platforms/android-30/android.jar --output bin/
-
-          # 4. הזרקת ה-Dex לתוך ה-APK
-          cd bin
-          zip -u ../manual_app.apk classes.dex
-
-      - name: Upload Manual APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: manual-apk
-          path: manual_app.apk
+          name: python-built-apk
+          path: bin/*.apk
+          
