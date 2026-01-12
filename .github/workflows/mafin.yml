@@ -1,4 +1,4 @@
-name: Unbreakable Android Build
+name: Absolute Path Fix
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,25 +14,31 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build Project Structure
+      - name: Install Locked Gradle 8.0
+        run: |
+          # הורדה והתקנה לתיקייה ספציפית בתוך מרחב העבודה
+          wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip
+          unzip -q gradle-8.0-bin.zip
+          # אנחנו לא מוסיפים ל-PATH כדי שגרסה 9 לא "תדחף", אנחנו פשוט נשתמש בנתיב המלא
+
+      - name: Create Structure
         run: |
           mkdir -p victim/src/main/java/com/research/lab/victim
           mkdir -p victim/src/main/res/xml
           mkdir -p controller/src/main/java/com/research/lab/controller
 
-          # הגדרות Gradle (גרסה 8.1.0 תואמת אנדרואיד)
           echo "include ':victim', ':controller'" > settings.gradle
+          
           cat <<'EOF' > build.gradle
           buildscript {
               repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
+              dependencies { classpath 'com.android.tools.build:gradle:7.4.2' }
           }
           allprojects {
               repositories { google(); mavenCentral() }
           }
           EOF
 
-          # הגדרות מודולים
           cat <<'EOF' > victim/build.gradle
           plugins { id 'com.android.application' }
           android {
@@ -53,7 +59,6 @@ jobs:
 
       - name: Inject Java & Manifests
         run: |
-          # קוד מינימליסטי למניעת שגיאות קומפילציה
           cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
           package com.research.lab.victim;
           import android.accessibilityservice.AccessibilityService;
@@ -96,13 +101,16 @@ jobs:
           </manifest>
           EOF
 
-      - name: Safe Compile (No-System-Gradle)
+      - name: Final Build with Absolute Path
         run: |
-          # כאן הקסם: אנחנו מורידים את ה-Wrapper של גרסה 8.0 ומריצים רק אותו
-          # זה מבטיח שגרסה 9.2.1 של המערכת לא תיגע בקימפול
-          npm install -g gradle
-          gradle wrapper --gradle-version 8.0
-          chmod +x gradlew
+          # כאן הקסם: שימוש בנתיב המלא לגרסה 8.0 שהורדנו. שום דבר לא יכול לשבור את זה.
+          ./gradle-8.0/bin/gradle assembleDebug --no-daemon
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-apks
+          path: "**/build/outputs/apk/debug/*.apk"
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload
