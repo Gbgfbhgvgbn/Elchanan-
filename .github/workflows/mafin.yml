@@ -1,4 +1,4 @@
-name: Locked Build
+name: Bazel Android Build
 on: [push, workflow_dispatch]
 
 jobs:
@@ -8,101 +8,70 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Manual Gradle Download
-        # אנחנו מורידים גרסה 8.0 ידנית לתוך תיקייה בשם "mygradle"
+      - name: Install Bazel
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip
-          unzip -q gradle-8.0-bin.zip
-          mv gradle-8.0 mygradle
+          sudo apt-get update && sudo apt-get install -y bazel-bootstrap
+          # אנחנו משתמשים ב-Bazel כי הוא מתעלם לחלוטין מגרסאות Gradle של המערכת
 
-      - name: Create Structure
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create Structure and Bazel Files
         run: |
-          mkdir -p victim/src/main/java/com/research/lab/victim
-          mkdir -p victim/src/main/res/xml
-          mkdir -p controller/src/main/java/com/research/lab/controller
-          echo "include ':victim', ':controller'" > settings.gradle
+          mkdir -p src/main/java/com/research/lab
           
-          cat <<'EOF' > build.gradle
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:7.4.2' }
-          }
-          allprojects {
-              repositories { google(); mavenCentral() }
-          }
+          # קובץ WORKSPACE - מגדיר את הפרויקט ללא Gradle
+          cat <<'EOF' > WORKSPACE
+          android_sdk_repository(name = "androidsdk")
           EOF
 
-          cat <<'EOF' > victim/build.gradle
-          plugins { id 'com.android.application' }
-          android {
-              namespace 'com.research.lab.victim'
-              compileSdk 33
-              defaultConfig { applicationId "com.research.lab.victim"; minSdk 24; targetSdk 33 }
-          }
+          # קובץ BUILD - מגדיר איך לבנות את ה-APK
+          cat <<'EOF' > BUILD
+          android_binary(
+              name = "victim_app",
+              manifest = "AndroidManifest.xml",
+              deps = [":lib"],
+          )
+          android_library(
+              name = "lib",
+              srcs = ["src/main/java/com/research/lab/App.java"],
+          )
           EOF
 
-          cat <<'EOF' > controller/build.gradle
-          plugins { id 'com.android.application' }
-          android {
-              namespace 'com.research.lab.controller'
-              compileSdk 33
-              defaultConfig { applicationId "com.research.lab.controller"; minSdk 24; targetSdk 33 }
-          }
-          EOF
-
-      - name: Inject Code
-        run: |
-          cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
-          package com.research.lab.victim;
-          import android.accessibilityservice.AccessibilityService;
+          # יצירת הקוד
+          cat <<'EOF' > src/main/java/com/research/lab/App.java
+          package com.research.lab;
           import android.app.Activity;
-          public class VictimApp {
-              public static class LoadingActivity extends Activity {}
-              public static class StealthService extends AccessibilityService {
-                  public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent e) {}
-                  public void onInterrupt() {}
-              }
+          import android.os.Bundle;
+          public class App extends Activity {
+              @Override protected void onCreate(Bundle s) { super.onCreate(s); }
           }
           EOF
-          cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
-          package com.research.lab.controller;
-          import android.app.Activity;
-          public class ControllerApp extends Activity {}
-          EOF
-          cat <<'EOF' > victim/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application>
-                  <activity android:name=".VictimApp$LoadingActivity" android:exported="true">
-                      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+
+          # יצירת המניפסט
+          cat <<'EOF' > AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.research.lab">
+              <application android:label="ResearchApp">
+                  <activity android:name=".App" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
                   </activity>
-                  <service android:name=".VictimApp$StealthService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
-                      <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
-                      <meta-data android:name="android.accessibilityservice" android:resource="@xml/acc_config" />
-                  </service>
               </application>
           </manifest>
           EOF
-          echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityFlags="flagDefault" />' > victim/src/main/res/xml/acc_config.xml
-          cat <<'EOF' > controller/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application><activity android:name=".ControllerApp" android:exported="true">
-                  <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
-              </activity></application>
-          </manifest>
-          EOF
 
-      - name: Forced Build
+      - name: Build with Bazel
         run: |
-          # כאן אנחנו משתמשים בנתיב המפורש ל-Binary שהורדנו. 
-          # אין סיכוי שגרסה 9 תתערב כי אנחנו לא קוראים ל-"gradle" אלא ל-"./mygradle/bin/gradle"
-          ./mygradle/bin/gradle assembleDebug --no-daemon
+          # הפקודה הזו בונה APK בלי לגעת ב-Gradle אפילו פעם אחת
+          bazel build //:victim_app
 
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-apk
+          path: bazel-bin/*.apk
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
