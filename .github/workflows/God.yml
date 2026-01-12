@@ -1,4 +1,4 @@
-name: Final Fix - Total Isolation
+name: Global Fix for Gradle 9 Error
 on: [push, workflow_dispatch]
 
 jobs:
@@ -6,36 +6,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Completely Remove System Gradle
+      - name: Create Isolated Project
         run: |
-          # ביטול משתני הסביבה שגורמים ל-GitHub להשתמש בגרסה 9.2.1
-          unset GRADLE_HOME
-          unset GRADLE_USER_HOME
-          # מחיקת המטמון וכל קבצי המערכת של Gradle
-          sudo rm -rf /usr/bin/gradle /usr/local/bin/gradle /opt/hostedtoolcache/gradle
-          echo "System Gradle purged."
-
-      - name: Manual Setup of Stable Gradle
-        run: |
-          # הורדה והגדרה בתיקייה מבודדת לגמרי בתוך הפרויקט
-          wget -q https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
-          unzip -q gradle-8.10.2-bin.zip
-          # יצירת משתנה נתיב מוחלט לשימוש בשלבים הבאים
-          echo "MY_GRADLE=$(pwd)/gradle-8.10.2/bin/gradle" >> $GITHUB_ENV
-
-      - name: Generate Clean Project Files
-        run: |
-          # מחיקת הכל לפני שמתחילים כדי למנוע "זיהום"
-          find . -maxdepth 1 ! -name 'gradle-8.10.2' ! -name '.github' ! -name '.' -exec rm -rf {} +
-          
+          # יצירת התיקיות
+          mkdir -p gradle/wrapper
           mkdir -p app/src/main/java/com/research/lab
+          
+          # 1. יצירת קובץ ה-Wrapper - זה הלב של הפתרון
+          # כאן אנחנו מכריחים את המערכת להוריד ולהשתמש ב-8.5 (הגרסה הכי יציבה כיום)
+          cat <<'EOF' > gradle/wrapper/gradle-wrapper.properties
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+          # 2. יצירת קובץ ההרצה (gradlew)
+          # אנחנו לא משתמשים ב-gradle של המערכת, אלא ב-Wrapper שאנחנו יוצרים עכשיו
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradlew -o gradlew
+          chmod +x gradlew
+
+          # 3. יצירת קבצי הפרויקט
           echo "include ':app'" > settings.gradle
           echo "buildscript { repositories { google(); mavenCentral() }; dependencies { classpath 'com.android.tools.build:gradle:8.1.0' } }" > build.gradle
           echo "allprojects { repositories { google(); mavenCentral() } }" >> build.gradle
@@ -49,24 +48,18 @@ jobs:
           }
           EOF
 
-          cat <<'EOF' > app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.research.lab">
-              <application><activity android:name=".MainActivity" android:exported="true">
-                  <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-              </activity></application>
-          </manifest>
-          EOF
-          
           echo "package com.research.lab; public class MainActivity extends android.app.Activity {}" > app/src/main/java/com/research/lab/MainActivity.java
+          echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.research.lab"><application><activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity></application></manifest>' > app/src/main/AndroidManifest.xml
 
-      - name: Build with Absolute Path
+      - name: Build using Wrapper Only
         run: |
-          # שימוש בנתיב המוחלט ששמרנו - המערכת לא יכולה להתבלבל עם גרסה 9
-          $MY_GRADLE -v
-          $MY_GRADLE assembleDebug --no-daemon --no-build-cache
+          # הסרה של GRADLE_HOME כדי למנוע מגרסה 9 להתערב
+          unset GRADLE_HOME
+          # הרצה אך ורק דרך ה-wrapper המקומי
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: research-apk
+          name: success-apk
           path: app/build/outputs/apk/debug/*.apk
