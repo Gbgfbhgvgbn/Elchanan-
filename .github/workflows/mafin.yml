@@ -1,45 +1,48 @@
-name: Bulletproof Android Build
+name: Final Nuclear Fix
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # שימוש בקונטיינר מבודד עם כל הכלים מותקנים מראש
-    container:
-      image: openjdk:17-jdk-slim
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Build Tools
-        run: |
-          apt-get update && apt-get install -y wget unzip
-          # הורדת Gradle 8.1.1 בצורה ידנית ומבודדת
-          wget -q https://services.gradle.org/distributions/gradle-8.1.1-bin.zip
-          unzip -q gradle-8.1.1-bin.zip
-          mv gradle-8.1.1 /opt/gradle
-          ln -s /opt/gradle/bin/gradle /usr/bin/gradle
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-      - name: Build Project Structure
+      - name: Destroy System Gradle and Force 8.0
+        run: |
+          # הסרת כל זכר ל-Gradle 9 מהנתיב של GitHub
+          sudo rm -rf /usr/bin/gradle
+          sudo rm -rf /usr/local/bin/gradle
+          
+          # הורדה ידנית של גרסה 8.0 היציבה
+          wget -q https://services.gradle.org/distributions/gradle-8.0-bin.zip
+          unzip -q gradle-8.0-bin.zip
+          echo "$(pwd)/gradle-8.0/bin" >> $GITHUB_PATH
+
+      - name: Create Structure
         run: |
           mkdir -p victim/src/main/java/com/research/lab/victim
           mkdir -p victim/src/main/res/xml
           mkdir -p controller/src/main/java/com/research/lab/controller
 
-          # הגדרות שורש
           echo "include ':victim', ':controller'" > settings.gradle
+          
           cat <<'EOF' > build.gradle
           buildscript {
               repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
+              dependencies { classpath 'com.android.tools.build:gradle:7.4.2' }
           }
           allprojects {
               repositories { google(); mavenCentral() }
           }
           EOF
 
-          # הגדרות Victim
           cat <<'EOF' > victim/build.gradle
           plugins { id 'com.android.application' }
           android {
@@ -49,7 +52,6 @@ jobs:
           }
           EOF
 
-          # הגדרות Controller
           cat <<'EOF' > controller/build.gradle
           plugins { id 'com.android.application' }
           android {
@@ -59,9 +61,9 @@ jobs:
           }
           EOF
 
-      - name: Inject Java Code
+      - name: Inject Java and Manifests
         run: |
-          # Victim Code
+          # קוד Victim
           cat <<'EOF' > victim/src/main/java/com/research/lab/victim/VictimApp.java
           package com.research.lab.victim;
           import android.accessibilityservice.AccessibilityService;
@@ -78,7 +80,7 @@ jobs:
           }
           EOF
 
-          # Controller Code
+          # קוד Controller
           cat <<'EOF' > controller/src/main/java/com/research/lab/controller/ControllerApp.java
           package com.research.lab.controller;
           import android.app.Activity;
@@ -88,7 +90,7 @@ jobs:
           }
           EOF
 
-          # Manifests
+          # מניפסטים (שימוש ב-EOF עם גרש שומר על ה-$)
           cat <<'EOF' > victim/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application>
@@ -103,6 +105,26 @@ jobs:
           </manifest>
           EOF
           echo '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityFlags="flagDefault" />' > victim/src/main/res/xml/acc_config.xml
+
+          cat <<'EOF' > controller/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application><activity android:name=".ControllerApp" android:exported="true">
+                  <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+              </activity></application>
+          </manifest>
+          EOF
+
+      - name: Build
+        run: |
+          # בדיקה סופית שאנחנו על הגרסה הנכונה
+          gradle -v
+          gradle assembleDebug --no-daemon
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-apks
+          path: "**/build/outputs/apk/debug/*.apk"
 
           cat <<'EOF' > controller/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
